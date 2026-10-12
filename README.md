@@ -1,173 +1,151 @@
-# Audio_Grammar_Scoring
+# Audio Grammar Scoring
 
-An audio-based machine learning project that predicts spoken English grammar scores from speech recordings. It explores transcript-based language models, acoustic representations, and ensemble learning for continuous score prediction.
+**Spoken-English Grammar Score Prediction**
 
-## Project Overview
+A machine-learning solution for predicting a continuous grammar score
+from spoken-English recordings. The project combines transcript-based
+language models with audio representations and regression models, then
+evaluates an ensemble using out-of-fold (OOF) predictions.
 
-The goal is to predict a grammar score for each spoken-English recording.
+## Problem Statement
 
-The repository contains two notebooks:
+Given an audio recording of a person speaking English, predict its
+grammar score. The training data contains `filename` and `label`; the
+test data contains `filename` only. The final submission must contain
+the test filenames and their predicted labels.
 
-| Notebook | Description |
-|---|---|
-| `Grammar_Scoring_Experiments.ipynb` | Full experimentation and model-development workflow, including exploration, model comparisons, and ensemble experiments. |
-| `Grammar_Scoring_Engine.ipynb` | Clean evaluation and inference workflow with visualizations, error analysis, ensemble evaluation, and submission generation. |
-
-The clean notebook reuses saved model predictions and embeddings where available, avoiding unnecessary reruns of expensive neural-model training and feature extraction.
+The available dataset has 769 training rows and 216 test rows. In the
+experiments, rows with a zero label were excluded from the eligible
+supervised evaluation/training population, leaving 732 rows. Confirm
+this filtering rule against the competition rubric before reusing the
+pipeline on a different dataset.
 
 ## Model Architecture
 
-```text
-                         Input speech audio
-                                  |
-                +-----------------+-----------------+
-                |                 |                 |
-        Whisper canonical  Whisper verbatim   Wav2Vec2 CTC
-          transcription     transcription    transcription
-                |                 |                 |
-                +-----------------+-----------------+
-                                  |
-                         DeBERTa regressors
-                                  |
-                       Text-based predictions
-                                  |
-                                  +----------------------+
-                                                         |
-Audio representations                                    |
-        |                                                |
-   +----+--------------------+                           |
-   |                         |                           |
-WavLM embeddings       Whisper embeddings                |
-   |                         |                           |
- RBF-SVR                   RBF-SVR                      |
-   |                         |                           |
-   +-------------------------+---------------------------+
-                                  |
-                      Non-negative linear stack
-                                  |
-                       Final grammar score
-                                  |
-                     Clip prediction to [1, 5]
+The final ensemble uses five complementary prediction streams:
+
+1.  **Wav2Vec2 CTC transcript → DeBERTa regressor** --- uses a
+    CTC-generated transcript.
+2.  **Canonical Whisper transcript → DeBERTa regressor** --- uses a
+    normalized Whisper transcript.
+3.  **Verbatim Whisper transcript → DeBERTa regressor** --- preserves a
+    more speech-faithful transcript variant.
+4.  **WavLM audio embeddings → SVR** --- predicts from audio embeddings
+    using a scaled support-vector regressor.
+5.  **Whisper audio embeddings → RBF-SVR** --- predicts from Whisper
+    audio embeddings using an RBF-kernel support-vector regressor.
+
+The five base predictions are combined by a **non-negative linear
+stacker**. A **linear calibration** stage then adjusts the stacked
+predictions' scale and offset.
+
+``` text
+                         Speech recordings
+                                 |
+              +------------------+------------------+
+              |                  |                  |
+        Wav2Vec2 CTC       Whisper canonical   Whisper verbatim
+         transcript           transcript          transcript
+              |                  |                  |
+              +------------------+------------------+
+                                 |
+                       DeBERTa regressors
+                                 |
+                       Three text predictions
+                                 |
+                                 +-----------------------------+
+                                                               |
+        Audio recordings                                       |
+              |                                                |
+        +-----+-------------------+                            |
+        |                         |                            |
+   WavLM embeddings        Whisper embeddings                  |
+        |                         |                            |
+   Scaled SVR                 RBF-SVR                          |
+        |                         |                            |
+        +-------------------------+----------------------------+
+                                 |
+                       Five prediction streams
+                                 |
+                   Non-negative linear stacking
+                                 |
+                       Linear calibration
+                                 |
+                     Predicted grammar scores
+                                 |
+                       Submission CSV file
 ```
 
-### Components and rationale
+## Repository / Notebook Workflow
 
-- **Canonical Whisper transcript:** Provides normalized text for contextual grammar analysis.
-- **Verbatim Whisper transcript:** Retains more spoken wording and disfluencies, providing a different view of the utterance.
-- **Wav2Vec2 CTC transcript:** Adds a transcription pathway with different recognition characteristics.
-- **DeBERTa regressors:** Model contextual language patterns and output continuous grammar-score predictions.
-- **WavLM embeddings + RBF-SVR:** Add an acoustic signal that does not depend solely on recognized text.
-- **Whisper embeddings + RBF-SVR:** Provide a second learned audio representation and nonlinear regression.
-- **Non-negative linear stack:** Combines base-model predictions with non-negative learned coefficients.
-- **Score clipping:** Constrains final predictions to the intended non-zero rubric range of 1 to 5.
+The project is organized around two workflows:
 
-## Workflow
+-   **Experimentation:** data exploration, feature/model experiments,
+    OOF generation, model comparisons, and ensemble selection.
+-   **Evaluation and inference:** loads saved predictions and
+    embeddings, checks alignment, evaluates base models and ensembles,
+    performs calibration, and creates a submission.
 
-1. **Exploratory data analysis**
-   - Inspect the train and test datasets.
-   - Examine the target distribution and zero-label rows.
-   - Validate array shapes, row counts, and prediction values.
-2. **Model development and experimentation**
-   - Compare transcript-based and audio-based predictions.
-   - Reuse saved predictions and embeddings where available.
-3. **Evaluation**
-   - Calculate RMSE, MAE, Pearson correlation, and \(R^2\).
-   - Plot predicted versus actual scores.
-   - Inspect residual distributions and error by true score.
-4. **Ensemble evaluation**
-   - Evaluate a non-negative linear stack using cross-validation over saved out-of-fold (OOF) predictions.
-   - Inspect the fitted stacking coefficients.
-5. **Test inference**
-   - Combine test predictions from the base models.
-   - Validate the final output and write `submission.csv`.
+The final inference notebook is designed to reuse saved artifacts. It
+does **not** retrain the expensive neural models or repeat audio feature
+extraction. It still requires the relevant saved OOF predictions and
+embeddings to be attached to the Kaggle notebook as inputs, or available
+at the configured paths.
 
-## Dataset
+## Evaluation
 
-The competition data includes:
+Evaluation is performed on eligible training rows using out-of-fold
+predictions so that each row's evaluation prediction is produced without
+fitting the corresponding validation fold. The notebook reports
+regression metrics and diagnostic plots, including model-level
+performance, ensemble comparisons, residual/error analysis, and
+prediction-versus-target visualizations.
 
-- `train.csv`: training filenames and target labels.
-- `test.csv`: filenames requiring predictions.
-- Audio files for the training and test sets.
+The exact evaluation results depend on the artifacts loaded and the
+cross-validation/calibration procedure used.
 
-The working data used in the experiments contained **769 training rows** and **216 test rows**. The main regression evaluation used **732 rows with labels greater than zero**, excluding 37 zero-label rows to match the saved artifacts.
+----------------------------------------------------------------------------
+  Model                OOF RMSE ↓      OOF MAE ↓        Pearson           R² ↑
+                                                  correlation ↑ 
+  ---------------- -------------- -------------- -------------- --------------
+  **Non-negative     **0.495771**   **0.381186**   **0.872509**   **0.760822**
+  linear stack**                                                
 
-The competition data and audio files are not included in this repository. Access them through the official competition and comply with its terms.
+  Whisper RBF-SVR        0.583209       0.459272       0.820697       0.669016
 
-## Evaluation Results
+  WavLM SVR              0.591130       0.451920       0.813261       0.659964
 
-The latest reported cross-validated evaluation of the saved-prediction stack is shown below.
+  CTC + DeBERTa          0.605535       0.469649       0.812475       0.643190
 
-| Model | RMSE ↓ | MAE ↓ | Pearson r ↑ | R² ↑ |
-|---|---:|---:|---:|---:|
-| **Non-negative linear stack** | **0.495771** | **0.381186** | **0.872509** | **0.760822** |
-| Whisper | 0.583209 | 0.459272 | 0.820697 | 0.669016 |
-| WavLM | 0.591130 | 0.451920 | 0.813261 | 0.659964 |
-| CTC | 0.605535 | 0.469649 | 0.812475 | 0.643190 |
-| Canonical | 0.616168 | 0.488323 | 0.797048 | 0.630548 |
-| Verbatim | 0.621969 | 0.487574 | 0.794867 | 0.623560 |
+  Canonical              0.616168       0.488323       0.797048       0.630548
+  Whisper +                                                     
+  DeBERTa                                                       
 
-**Interpretation:** The stack has the lowest RMSE and MAE among the listed models. Its RMSE is approximately **15.0% lower** than the best individual model by RMSE, Whisper. The Pearson correlation indicates a strong positive relationship between predicted and true scores.
+  Verbatim               0.621969       0.487574       0.794867       0.623560
+  Whisper +                                                     
+  DeBERTa                                                       
+  ----------------------------------------------------------------------------
 
-### Leaderboard reference
+The stack had the lowest RMSE and MAE among these evaluated options. Its
+RMSE was approximately **15% lower than the best individual model's
+RMSE** in this comparison. This supports the finding that the different
+prediction streams contribute complementary information: the ensemble
+performed better locally than any one of its constituent prediction
+streams.
 
-The previous submitted file achieved a **public leaderboard score of 0.3412**. This is a historical competition result, not the cross-validation result above. A new submission's score must be checked on the competition leaderboard; improvement is not guaranteed.
+The audio-based models were the strongest individual models in this
+comparison, with Whisper RBF-SVR leading on RMSE and WavLM SVR close
+behind. The three transcript-based DeBERTa predictors each provided a
+distinct text signal, but none outperformed the two audio regressors
+individually on the reported metrics.
 
-### Evaluation caveat
 
-The stack metrics are calculated by cross-validating a second-stage regressor over saved base-model OOF predictions. The base predictions were produced in prior experiments, and their fold compatibility has not been independently verified end to end. Therefore, these metrics are useful for model comparison but should not be interpreted as a fully independent final generalization estimate.
+## Conclusion
 
-## Metrics
-
-- **RMSE:** Penalizes larger prediction errors more heavily.
-- **MAE:** Measures average absolute prediction error.
-- **Pearson correlation:** Measures linear association between predictions and labels.
-- **R²:** Measures explained variance relative to a mean-prediction baseline.
-
-## Getting Started
-
-### Clone the repository
-
-```bash
-git clone <your-repository-url>
-cd Grammar_Scoring
-```
-
-### Prepare the environment
-
-The notebooks use Python with common data-science and machine-learning libraries, including:
-
-- NumPy
-- pandas
-- Matplotlib
-- scikit-learn
-
-The original model-development notebook may require additional libraries for transformer models, speech processing, and embedding extraction, depending on which training cells are executed.
-
-### Provide the required data and artifacts
-
-Make the following available in the notebook environment:
-
-- Competition train/test CSV files and audio files.
-- Saved OOF and test prediction arrays from the previous model runs.
-- Saved embeddings required by the Whisper audio-regression branch.
-
-The notebooks were developed using Kaggle-style paths. Update the path configuration cells if running elsewhere. The clean notebook reuses saved artifacts; it does not recreate missing neural-model outputs automatically.
-
-### Generate predictions
-
-Run `Grammar_Scoring_Engine.ipynb` from top to bottom. The final submission is saved at:
-
-```text
-/kaggle/working/grammar_scoring_final/submission.csv
-```
-
-The file contains the test filenames and predicted `label` values.
-
-## Repository Structure
-
-```text
-Grammar_Scoring/
-├── README.md
-├── Grammar_Scoring_Experiments.ipynb
-└── Grammar_Scoring_Engine.ipynb
-```
+The strongest reported solution combines three transcript-based DeBERTa
+predictors with two audio-embedding regressors, uses non-negative linear
+stacking to combine their outputs, and applies linear calibration before
+submission. In the saved-prediction evaluation, the stack outperformed
+each individual predictor. The best reported public leaderboard
+submission, `predictions_stack_linear_calibrated.csv`, achieved
+**0.3344**.
